@@ -1,0 +1,164 @@
+name: release
+
+# A RELEASE.YYYY-MM-DDTHH-MM-SSZ tag on a master commit publishes
+# ghcr.io/latere-ai/minio:<tag> and :latest for linux/amd64 and linux/arm64,
+# with SBOM and build provenance attestations, and a GitHub release.
+on:
+  push:
+    tags: ["RELEASE.*"]
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/latere-ai/minio
+  # The mc release Dockerfile.release bundles; the smoke test creates its
+  # bucket with the same image.
+  MC_IMAGE: ghcr.io/latere-ai/mc:RELEASE.2026-09-24T19-45-33Z@sha256:6e37dec77ff93cb690b9ba3f1fe2c3b34efa1cd77181fca909039819bd670a24
+  MC_TAG: RELEASE.2026-09-24T19-45-33Z
+  MC_COMMIT: 51e2bf2d1cebcb149e3f9f96aeca7d559d068160
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The ldflags of upstream's release build, from its own generator:
+      # Version is the tag's timestamp, ReleaseTag the tag itself.
+      - name: Version
+        id: version
+        run: |
+          set -eu
+          echo "$TAG" | grep -Eq '^RELEASE\.[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z$' ||
+            { echo "::error::$TAG is not RELEASE.YYYY-MM-DDTHH-MM-SSZ"; exit 1; }
+          git merge-base --is-ancestor HEAD origin/master ||
+            { echo "::error::$TAG does not point at a commit on master"; exit 1; }
+          version=$(echo "${TAG#RELEASE.}" | sed -E 's/T([0-9]{2})-([0-9]{2})-([0-9]{2})Z$/T\1:\2:\3Z/')
+          ldflags=$(MINIO_RELEASE=RELEASE go run buildscripts/gen-ldflags.go "$version")
+          case "$ldflags " in
+            *"cmd.ReleaseTag=$TAG "*) ;;
+            *) echo "::error::unexpected ldflags: $ldflags"; exit 1 ;;
+          esac
+          echo "ldflags=$ldflags" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build the amd64 image for the smoke test
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64
+          load: true
+          tags: minio:smoke
+          build-args: |
+            LDFLAGS=${{ steps.version.outputs.ldflags }}
+            RELEASE=${{ env.TAG }}
+            COMMIT=${{ github.sha }}
+        env:
+          DOCKER_BUILD_RECORD_RETENTION_DAYS: 7
+
+      - name: Smoke test
+        env:
+          MINIO_TAG: ${{ env.TAG }}
+          MINIO_COMMIT: ${{ github.sha }}
+        run: buildscripts/image-smoke.sh minio:smoke "$MC_IMAGE"
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No buildx attestations: the index lists exactly the two platform
+      # images. SBOM and provenance are attached below as registry
+      # referrers.
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: Dockerfile.release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          sbom: false
+          tags: |
+            ${{ env.IMAGE }}:${{ env.TAG }}
+            ${{ env.IMAGE }}:latest
+          build-args: |
+            LDFLAGS=${{ steps.version.outputs.ldflags }}
+            RELEASE=${{ env.TAG }}
+            COMMIT=${{ github.sha }}
+        env:
+          DOCKER_BUILD_RECORD_RETENTION_DAYS: 7
+
+      # Each platform runs by its own manifest digest: the local image
+      # store refuses one index digest pulled for two platforms.
+      - name: Check the pushed platforms
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{json .Manifest}}' > index.json
+          platforms=$(jq -r '[.manifests[].platform | select(.os != "unknown") | "\(.os)/\(.architecture)"] | sort | join(" ")' index.json)
+          test "$platforms" = "linux/amd64 linux/arm64" || { echo "::error::platforms: $platforms"; exit 1; }
+          for arch in amd64 arm64; do
+            child=$(jq -r --arg arch "$arch" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest' index.json)
+            out=$(docker run --rm --platform "linux/$arch" --entrypoint minio "$IMAGE@$child" --version)
+            echo "linux/$arch ($child): $out"
+            case $out in *"minio version $TAG "*) ;; *) echo "::error::unexpected version on linux/$arch"; exit 1 ;; esac
+          done
+
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - uses: actions/attest-sbom@36590ecaf038d6630c74f2da259095627d52ac11 # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          set -eu
+          {
+            echo "Image: \`$IMAGE:$TAG@$DIGEST\` (linux/amd64, linux/arm64)."
+            echo
+            echo "Built from $GITHUB_SHA with $(go env GOVERSION). SBOM and build provenance are attached to the image as attestations."
+          } > notes.md
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file notes.md sbom.spdx.json
+          {
+            echo "## Published"
+            echo
+            echo "\`$IMAGE:$TAG@$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"

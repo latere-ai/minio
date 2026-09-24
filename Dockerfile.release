@@ -1,73 +1,58 @@
-FROM golang:1.24-alpine AS build
+# syntax=docker/dockerfile:1
 
+# The MinIO server release image, ghcr.io/latere-ai/minio, built from this
+# checkout by .github/workflows/release.yml. The build stage runs on the
+# build host's platform and cross-compiles for the target, so no Go code
+# runs under emulation, and the runtime stage has no RUN steps.
+#
+# LDFLAGS carries the version variables from buildscripts/gen-ldflags.go;
+# the workflow computes them from the release tag.
+
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine3.24@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
+ARG TARGETOS
 ARG TARGETARCH
+ARG LDFLAGS
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN test -n "$LDFLAGS" \
+ && GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -tags kqueue -trimpath -buildvcs=false -ldflags "$LDFLAGS" -o /out/minio .
+
+# The mc release bundled beside the server, as upstream's image did:
+# compose healthchecks run `mc ready local` inside the server container.
+# Pinned by index digest, so each platform gets that release's own binary.
+FROM ghcr.io/latere-ai/mc:RELEASE.2026-09-24T19-45-33Z@sha256:6e37dec77ff93cb690b9ba3f1fe2c3b34efa1cd77181fca909039819bd670a24 AS mc
+
+# Entrypoint, command, environment, port and volume are the ones upstream's
+# release image declares, so `server /data` arguments and the *_FILE secret
+# conventions behave the same. MC_CONFIG_DIR keeps the bundled mc writable
+# when the container runs as a non-root user with no home directory.
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 ARG RELEASE
-
-ENV GOPATH=/go
-ENV CGO_ENABLED=0
-
-WORKDIR /build
-
-# Install curl and minisign
-RUN apk add -U --no-cache ca-certificates && \
-    apk add -U --no-cache curl && \
-    apk add -U --no-cache bash && \
-    go install aead.dev/minisign/cmd/minisign@v0.2.1
-
-# Download minio binary and signature files
-RUN curl -s -q https://dl.min.io/server/minio/release/linux-${TARGETARCH}/archive/minio.${RELEASE} -o /go/bin/minio && \
-    curl -s -q https://dl.min.io/server/minio/release/linux-${TARGETARCH}/archive/minio.${RELEASE}.minisig -o /go/bin/minio.minisig && \
-    curl -s -q https://dl.min.io/server/minio/release/linux-${TARGETARCH}/archive/minio.${RELEASE}.sha256sum -o /go/bin/minio.sha256sum && \
-    chmod +x /go/bin/minio
-
-# Download mc binary and signature files
-RUN curl -s -q https://dl.min.io/client/mc/release/linux-${TARGETARCH}/mc -o /go/bin/mc && \
-    curl -s -q https://dl.min.io/client/mc/release/linux-${TARGETARCH}/mc.minisig -o /go/bin/mc.minisig && \
-    curl -s -q https://dl.min.io/client/mc/release/linux-${TARGETARCH}/mc.sha256sum -o /go/bin/mc.sha256sum && \
-    chmod +x /go/bin/mc
-
-# Verify binary signature using public key "RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGavRUN"
-RUN minisign -Vqm /go/bin/minio -x /go/bin/minio.minisig -P RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav && \
-    minisign -Vqm /go/bin/mc -x /go/bin/mc.minisig -P RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav
-
-COPY dockerscripts/download-static-curl.sh /build/download-static-curl
-RUN chmod +x /build/download-static-curl && \
-    /build/download-static-curl
-
-FROM registry.access.redhat.com/ubi9/ubi-micro:latest
-
-ARG RELEASE
-
-LABEL name="MinIO" \
-      vendor="MinIO Inc <dev@min.io>" \
-      maintainer="MinIO Inc <dev@min.io>" \
-      version="${RELEASE}" \
-      release="${RELEASE}" \
-      summary="MinIO is a High Performance Object Storage, API compatible with Amazon S3 cloud storage service." \
-      description="MinIO object storage is fundamentally different. Designed for performance and the S3 API, it is 100% open-source. MinIO is ideal for large, private cloud environments with stringent security requirements and delivers mission-critical availability across a diverse range of workloads."
-
+ARG COMMIT
+LABEL org.opencontainers.image.title="minio" \
+      org.opencontainers.image.description="MinIO server ${RELEASE}, from the latere-ai/minio maintained fork" \
+      org.opencontainers.image.version="${RELEASE}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.source="https://github.com/latere-ai/minio" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
 ENV MINIO_ACCESS_KEY_FILE=access_key \
     MINIO_SECRET_KEY_FILE=secret_key \
     MINIO_ROOT_USER_FILE=access_key \
     MINIO_ROOT_PASSWORD_FILE=secret_key \
     MINIO_KMS_SECRET_KEY_FILE=kms_master_key \
-    MINIO_UPDATE_MINISIGN_PUBKEY="RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav" \
+    MINIO_UPDATE_MINISIGN_PUBKEY=RWTx5Zr1tiHQLwG9keckT0c45M3AGeHD6IvimQHpyRywVWGbP1aVSGav \
     MINIO_CONFIG_ENV_FILE=config.env \
     MC_CONFIG_DIR=/tmp/.mc
-
-RUN chmod -R 777 /usr/bin
-
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=build /go/bin/minio* /usr/bin/
-COPY --from=build /go/bin/mc* /usr/bin/
-COPY --from=build /go/bin/curl* /usr/bin/
-
-COPY CREDITS /licenses/CREDITS
-COPY LICENSE /licenses/LICENSE
-COPY dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
-
+COPY --from=build /out/minio /usr/bin/minio
+COPY --from=mc /usr/bin/mc /usr/bin/mc
+COPY --chmod=0755 dockerscripts/docker-entrypoint.sh /usr/bin/docker-entrypoint.sh
+COPY LICENSE CREDITS /licenses/
+COPY --from=mc /licenses/LICENSE /licenses/CREDITS /licenses/mc/
 EXPOSE 9000
 VOLUME ["/data"]
-
 ENTRYPOINT ["/usr/bin/docker-entrypoint.sh"]
 CMD ["minio"]
