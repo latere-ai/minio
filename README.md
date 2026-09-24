@@ -1,9 +1,49 @@
-> [!NOTE]
-> **THIS REPOSITORY IS NO LONGER MAINTAINED.**
->
-> **Alternatives:**
-> - **[AIStor Free](https://min.io/download)** — Full-featured, standalone edition for community use (free license)
-> - **[AIStor Enterprise](https://min.io/pricing)** — Distributed edition with commercial support
+# MinIO, maintained fork
+
+This repository is [latere-ai/minio](https://github.com/latere-ai/minio), a
+maintained fork of the archived MinIO community edition,
+[minio/minio](https://github.com/minio/minio). It is not affiliated with or
+endorsed by MinIO, Inc.
+
+- **Why:** upstream archived the community repositories, stopped serving
+  community binaries, and withdrew the community container images. MinIO's
+  current distribution, AIStor, requires a license key for any S3 operation.
+  This fork keeps an account-free S3 server available for test stacks, CI,
+  quickstarts and local development.
+- **Scope:** dependencies, the Go toolchain and security fixes are kept
+  current. New features are out of scope. The S3 API, configuration,
+  environment variables, on-disk format and the module path
+  `github.com/minio/minio` stay upstream's.
+- **Images:** `ghcr.io/latere-ai/minio:<release>` for linux/amd64 and
+  linux/arm64. The image declares the entrypoint, command, environment, port
+  and volume of upstream's release image and bundles the
+  [latere-ai/mc](https://github.com/latere-ai/mc) client, so
+  `server /data` arguments and `mc ready local` healthchecks work as before.
+  It runs on Alpine, so `/bin/sh` is BusyBox and there is no `curl`; use
+  `mc ready local` or BusyBox `wget` for HTTP healthchecks. Pin by digest.
+- **Releases:** a `RELEASE.YYYY-MM-DDTHH-MM-SSZ` tag on a `master` commit
+  runs [the release workflow](.github/workflows/release.yml). It builds
+  [Dockerfile.release](Dockerfile.release) with the version ldflags of
+  upstream's release build, so `minio --version` prints the release, runs
+  [the image smoke test](buildscripts/image-smoke.sh) (healthchecks, bucket
+  creation, conditional writes), pushes both platforms with SBOM and build
+  provenance attestations, and creates a GitHub release. To bundle a newer
+  mc, change the `ghcr.io/latere-ai/mc` line in Dockerfile.release and the
+  `MC_*` values in the workflow. Every push runs build, vet, unit tests and
+  govulncheck; a weekly govulncheck opens an issue on findings.
+- **Go:** the toolchain is go1.27.1 and the `go` directive is 1.26.0, which
+  changes some `GODEBUG` defaults from upstream's builds (TLS and HTTP
+  details); plain HTTP S3 clients see no difference.
+- **Backports:** [pgsty/silo](https://github.com/pgsty/silo), the SILO
+  community fork, is the reference for fixes made after upstream was
+  archived. [docs/backports.md](docs/backports.md) records each SILO
+  advisory and notable fix considered and its status; the deferred rows are
+  the maintenance backlog.
+- **Security:** report vulnerabilities as described in
+  [SECURITY.md](SECURITY.md).
+- **License:** GNU AGPL v3, as upstream ([LICENSE](LICENSE)).
+
+The upstream README follows.
 
 ---
 
