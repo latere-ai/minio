@@ -1,0 +1,54 @@
+name: govulncheck-weekly
+
+# A weekly govulncheck of master against the current vulnerability
+# database. Findings open an issue labeled govulncheck, or add a comment to
+# the open one, so a vulnerability published between pushes is not missed.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        id: scan
+        run: |
+          set +e
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./... > govulncheck.txt 2>&1
+          status=$?
+          set -e
+          cat govulncheck.txt
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      - name: Report findings
+        if: steps.scan.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          {
+            echo "govulncheck reported findings on master ($(git rev-parse --short HEAD)) in $RUN_URL."
+            echo
+            echo '```'
+            head -c 60000 govulncheck.txt
+            echo '```'
+          } > body.md
+          gh label create govulncheck --color B60205 \
+            --description "Findings of the weekly govulncheck" 2>/dev/null || true
+          issue=$(gh issue list --label govulncheck --state open --json number --jq '.[0].number')
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body-file body.md
+          else
+            gh issue create --title "govulncheck findings on master" --label govulncheck --body-file body.md
+          fi
+          exit 1
