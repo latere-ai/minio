@@ -39,6 +39,30 @@ endorsed by MinIO, Inc.
   archived. [docs/backports.md](docs/backports.md) records each SILO
   advisory and notable fix considered and its status; the deferred rows are
   the maintenance backlog.
+- **Behavior changes from security fixes:** the ported advisories change
+  a few behaviors on purpose, none on the S3 path of root or ordinary
+  credentials:
+  - OIDC STS (AssumeRoleWithWebIdentity, AssumeRoleWithClientGrants)
+    rejects HS256, HS384 and HS512 tokens; providers must sign with
+    JWKS-published RSA or ECDSA keys.
+  - LDAP STS answers an unknown user and a wrong password with the same
+    400 InvalidParameterValue and throttles logins per source address
+    (HTTP 429 with `Retry-After`).
+    `MINIO_IDENTITY_LDAP_STS_TRUSTED_PROXIES` names proxies whose
+    forwarded address may be used instead.
+  - Enabling and disabling a user or group need separate admin
+    permissions, `admin:EnableUser` / `admin:DisableUser` and
+    `admin:EnableGroup` / `admin:DisableGroup`.
+  - Replication-internal `X-Minio-Replication-*` headers are no longer
+    trusted from ordinary PutObject and CopyObject requests.
+  - S3 Select rejects oversized CSV and JSON records with
+    OverMaxRecordSize.
+  - A presigned request that binds a payload hash through the
+    `X-Amz-Content-Sha256` header is checked against the body.
+
+  Explicit version deletes needing `s3:DeleteObjectVersion`, and unsigned
+  `x-amz-*` headers being rejected, are SILO fixes this fork has not
+  ported yet; see [docs/backports.md](docs/backports.md).
 - **Security:** report vulnerabilities as described in
   [SECURITY.md](SECURITY.md).
 - **License:** GNU AGPL v3, as upstream ([LICENSE](LICENSE)).

@@ -25,32 +25,34 @@ reviewed against pgsty/silo at
 - **not applicable**: the code is not in this fork, or the change is SILO
   branding, packaging or an opt-in feature.
 
-The first release of this fork carries (2) only; the advisories below are
-its backlog, ported in later releases.
+The first release of this fork carried (2) only. The second release adds
+the advisory fixes marked ported below, cherry-picked from pgsty/silo with
+their authors and source commits recorded; SILO's AI co-author trailers
+were dropped from the messages. The deferred rows remain the backlog.
 
 ## Security advisories
 
 | Advisory | SILO fix | Area | Status |
 |---|---|---|---|
 | CVE-2025-62506 | upstream `c1a49490` | restricted session policy lets service or STS accounts mint unrestricted children | ported: inherited, the fix is in upstream master |
-| CVE-2026-33322 | `d24f449e` | OIDC STS JWT algorithm confusion; removes HMAC verification (HS256/384/512 providers must move to JWKS keys) | deferred (1) |
-| CVE-2026-33419 | `3b950f8f`, follow-ups `18b712d4`, `9e10f6d9`, `f4411089`, `5e40665a` | LDAP STS username enumeration; unified failure response and per-source login throttling | deferred (1) |
-| CVE-2026-34204 | `56fa63bf` | untrusted `X-Minio-Replication-*` headers written into replication metadata | deferred (1) |
-| CVE-2026-39414 | `3252d5b7`, follow-up `fd69c89d` | S3 Select buffers oversized CSV and JSON records | deferred (1) |
-| CVE-2026-41145 | `f444b6f3` | unsigned-trailer streaming PUT and UploadPart skip query-string signature verification | deferred (1) |
-| CVE-2026-40344 | `efb6e5b0` | Snowball auto-extract unsigned-trailer uploads skip authentication | deferred (1) |
-| CVE-2026-42600 | `73ac5247` | internode ReadMultiple path traversal; removes the unused endpoint | deferred (1); distributed deployments only |
+| CVE-2026-33322 | `d24f449e` | OIDC STS JWT algorithm confusion; removes HMAC verification (HS256/384/512 providers must move to JWKS keys) | ported: `75829935` |
+| CVE-2026-33419 | `3b950f8f`, follow-ups `18b712d4`, `9e10f6d9`, `f4411089`, `5e40665a` | LDAP STS username enumeration; unified failure response and per-source login throttling | ported: `55c440af`, `81529280`, `67efd8ea`, `22e5ae9f`, `7e6c4fbc` |
+| CVE-2026-34204 | `56fa63bf` | untrusted `X-Minio-Replication-*` headers written into replication metadata | ported: `07186c5e` |
+| CVE-2026-39414 | `3252d5b7`, follow-up `fd69c89d` | S3 Select buffers oversized CSV and JSON records | ported: `98d87885`, `65487456` |
+| CVE-2026-41145 | `f444b6f3` | unsigned-trailer streaming PUT and UploadPart skip query-string signature verification | ported: `5bb53d4c` |
+| CVE-2026-40344 | `efb6e5b0` | Snowball auto-extract unsigned-trailer uploads skip authentication | ported: `dfd008fe` |
+| CVE-2026-42600 | `73ac5247` | internode ReadMultiple path traversal; removes the unused endpoint | ported: `e5ddf692` |
 | SN-2026-002 | `ca7baa67` and follow-ups | internode storage-REST and grid payload containment | deferred (1); distributed deployments only, large change |
 | SN-2026-003 | silo-pkg v3.11.0, `2f55347f` | policy condition values taken from raw request entries | deferred (1); needs the matching change in `minio/pkg`, which is archived too |
 | SN-2026-004 | silo-pkg v3.11.0, `97b7d280` | object-only resource patterns reach twelve bucket-level writes | deferred (1); needs `minio/pkg` |
 | SN-2026-005 | silo-pkg v3.12.0, `eee05a17` | bare ARN prefixes accepted in policy writes | deferred (1); needs `minio/pkg` |
-| SN-2026-006 | `b73581b0`, `c4fd97d0` | SSE-C key not checked on zero-byte reads | deferred (1) |
-| SN-2026-007 | `474cd580`, `74c97d00`, `21870fa2` | GetObjectAttributes on SSE-C objects without the key | deferred (1) |
+| SN-2026-006 | `b73581b0`, `c4fd97d0` | SSE-C key not checked on zero-byte reads | ported: `9d14df34`; `c4fd97d0` adjusts a CopyObject metadata test this fork does not carry and does not apply |
+| SN-2026-007 | `474cd580`, `74c97d00`, `21870fa2` | GetObjectAttributes on SSE-C objects without the key | ported: `baf9c516`, `50196a7c`, `93874210`; the shared test helpers are from `c0e71597` (`eaa6d842`) |
 | SN-2026-008 | PR #101 (`93860345` through `04b097fd`) | internal replication headers trusted on presence | deferred (1); large change across 15 files |
-| SN-2026-009 | `58735ee3`, `229fe2b3` | enable and disable of users and groups authorized by one action | deferred (1) |
+| SN-2026-009 | `58735ee3`, `229fe2b3` | enable and disable of users and groups authorized by one action | ported: `5f639742`, `3bfd0673` |
 | SN-2026-010 | `75a6734e` | explicit version deletes authorized as `s3:DeleteObject` | deferred (1); does not apply cleanly, hand port |
 | SN-2026-011 | `12332543`, `87d8b596` | unsigned `x-amz-*` headers turn a signed PUT into CopyObject | deferred (1); does not apply cleanly, hand port |
-| SN-2026-012 | `c4b5e1cb` | header-only presigned payload hash not checked against the body | deferred (1) |
+| SN-2026-012 | `c4b5e1cb` | header-only presigned payload hash not checked against the body | ported: `a95e1c68` |
 | SN-2026-013 | #191, #192 | revoked IAM identities return through replay or recovery | deferred; site replication and shared IAM backends, large change |
 | SN-2026-014 | Console #56, Server #209 | anonymous share-download proxy of the embedded console | deferred (1): the proxy is in the embedded `github.com/minio/console` (`api/public_objects.go`), which is archived too; the fix needs a console fork or a port of SILO's. Until then, do not expose the console port beyond the deployment |
 | Client source address trust | `fe6dc478` | opt-in `MINIO_API_TRUSTED_PROXIES` boundary; not a vulnerability | not applicable: opt-in feature |
